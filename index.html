@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ultimate Scanner</title>
+<link rel="manifest" href="manifest.json">
+
+<script src="opencv.js"></script>
+<script src="jspdf.umd.min.js"></script>
+<script src="tesseract.min.js"></script>
+<script src="docx.min.js"></script>
+
+<style>
+body { font-family: Arial; background:#f4f4f4; padding:15px; }
+video, canvas, img { width:100%; max-width:500px; border-radius:12px; }
+button { padding:12px; margin:4px; font-size:16px; }
+textarea { width:100%; height:120px; margin-top:10px; }
+</style>
+</head>
+<body>
+
+<h2>Ultimate PWA Scanner</h2>
+
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
+
+<br>
+
+<button onclick="startCamera()">Start Camera</button>
+<button onclick="capture()">Scan Page</button>
+<button onclick="savePDF()">Save PDF</button>
+<button onclick="exportWord()">Export Word</button>
+<button onclick="runOCR()">OCR</button>
+
+<div id="preview"></div>
+<textarea id="ocr"></textarea>
+
+<script>
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const { jsPDF } = window.jspdf;
+const { Document, Packer, Paragraph } = window.docx;
+
+let pages = [];
+
+async function startCamera(){
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video:{ facingMode:"environment" }
+  });
+  video.srcObject = stream;
+}
+
+function capture(){
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.drawImage(video,0,0);
+
+  const img = canvas.toDataURL("image/jpeg",0.7);
+  pages.push(img);
+
+  const previewImg = document.createElement("img");
+  previewImg.src = img;
+  document.getElementById("preview").appendChild(previewImg);
+}
+
+async function runOCR(){
+  let text="";
+  document.getElementById("ocr").value="Processing...";
+  for(let img of pages){
+    const res = await Tesseract.recognize(img,"eng");
+    text += res.data.text + "\n";
+  }
+  document.getElementById("ocr").value=text;
+  return text;
+}
+
+async function exportWord(){
+  const text = await runOCR();
+  const doc = new Document({
+    sections:[{ children:[new Paragraph(text)] }]
+  });
+
+  const blob = await Packer.toBlob(doc);
+  const link=document.createElement("a");
+  link.href=URL.createObjectURL(blob);
+  link.download="document.docx";
+  link.click();
+}
+
+async function savePDF(){
+  if(!pages.length) return;
+
+  const pdf = new jsPDF({compress:true});
+  for(let i=0;i<pages.length;i++){
+    if(i>0) pdf.addPage();
+    pdf.addImage(pages[i],"JPEG",0,0,210,297);
+  }
+  pdf.save("scan.pdf");
+}
+
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("sw.js");
+}
+</script>
+
+</body>
+</html>
