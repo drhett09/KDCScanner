@@ -9,54 +9,158 @@
 <script src="opencv.js"></script>
 <script src="jspdf.umd.min.js"></script>
 <script src="tesseract.min.js"></script>
-<script src="docx.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/dist/index.umd.js"></script>
 
 <style>
-body { font-family: Arial; background:#f4f4f4; padding:15px; }
-video, canvas, img { width:100%; max-width:500px; border-radius:12px; }
-button { padding:12px; margin:4px; font-size:16px; }
-textarea { width:100%; height:120px; margin-top:10px; }
+body { margin:0; font-family:sans-serif; background:#111; color:#fff; }
+#video { width:100%; height:calc(100vh - 140px); object-fit:cover; display:block; }
+canvas { display:none; }
+#toolbar { position:absolute; bottom:0; width:100%; display:flex; justify-content:space-around; background:rgba(0,0,0,0.5); padding:10px; }
+#preview { display:flex; overflow-x:auto; padding:10px; gap:5px; background:#222; }
+#preview img { width:80px; border:2px solid #0f0; border-radius:6px; }
+button { background:#0f0; border:none; border-radius:50%; width:60px; height:60px; font-size:18px; color:#000; }
+textarea { width:100%; height:120px; margin-top:10px; background:#222; color:#fff; border:none; border-radius:6px; padding:8px; }
 </style>
 </head>
 <body>
 
-<h2>Ultimate PWA Scanner</h2>
-
 <video id="video" autoplay playsinline></video>
 <canvas id="canvas"></canvas>
 
-<br>
-
-<button onclick="startCamera()">Start Camera</button>
-<button onclick="capture()">Scan Page</button>
-<button onclick="savePDF()">Save PDF</button>
-<button onclick="exportWord()">Export Word</button>
-<button onclick="runOCR()">OCR</button>
+<div id="toolbar">
+  <button onclick="capturePage()">📸</button>
+  <button onclick="savePDF()">📄</button>
+  <button onclick="exportWord()">📝</button>
+  <button onclick="runOCR()">🔍</button>
+</div>
 
 <div id="preview"></div>
-<textarea id="ocr"></textarea>
+<textarea id="ocr" placeholder="OCR text will appear here..."></textarea>
 
 <script>
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const { jsPDF } = window.jspdf;
-const { Document, Packer, Paragraph } = window.docx;
+const { Document, Packer, Paragraph } = docx;
 
 let pages = [];
 
+// Start camera
 async function startCamera(){
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video:{ facingMode:"environment" }
-  });
+  const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:"environment" } });
   video.srcObject = stream;
 }
+startCamera();
 
-function capture(){
+// Real-time edge overlay
+function detectEdgesLive(){
+  if(video.readyState===video.HAVE_ENOUGH_DATA){
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+    let src = cv.imread(canvas);
+    let gray = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, gray, new cv.Size(5,5),0);
+    let edges = new cv.Mat();
+    cv.Canny(gray, edges, 75,200);
+
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    let maxArea=0, biggest=null;
+    for(let i=0;i<contours.size();i++){
+      let cnt = contours.get(i);
+      let peri = cv.arcLength(cnt,true);
+      let approx = new cv.Mat();
+      cv.approxPolyDP(cnt, approx, 0.02*peri,true);
+      if(approx.rows===4){
+        let area = cv.contourArea(approx);
+        if(area>maxArea){ maxArea=area; biggest=approx; }
+      }
+    }
+
+    if(biggest){
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#00FF00";
+      ctx.beginPath();
+      for(let i=0;i<4;i++){
+        let p1 = biggest.intPtr(i,0);
+        let p2 = biggest.intPtr((i+1)%4,0);
+        ctx.moveTo(p1[0],p1[1]);
+        ctx.lineTo(p2[0],p2[1]);
+      }
+      ctx.stroke();
+    }
+
+    src.delete(); gray.delete(); edges.delete(); contours.delete(); hierarchy.delete();
+  }
+  requestAnimationFrame(detectEdgesLive);
+}
+detectEdgesLive();
+
+// Perspective crop + enhance
+function processCapture(){
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   ctx.drawImage(video,0,0);
 
+  let src = cv.imread(canvas);
+  let gray = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.GaussianBlur(gray, gray, new cv.Size(5,5),0);
+  let edges = new cv.Mat();
+  cv.Canny(gray, edges, 75,200);
+
+  let contours = new cv.MatVector();
+  let hierarchy = new cv.Mat();
+  cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+  let maxArea=0, biggest=null;
+  for(let i=0;i<contours.size();i++){
+    let cnt = contours.get(i);
+    let peri = cv.arcLength(cnt,true);
+    let approx = new cv.Mat();
+    cv.approxPolyDP(cnt, approx, 0.02*peri,true);
+    if(approx.rows===4){
+      let area = cv.contourArea(approx);
+      if(area>maxArea){ maxArea=area; biggest=approx; }
+    }
+  }
+
+  if(biggest){
+    // 4-point transform
+    let pts = [];
+    for(let i=0;i<4;i++) pts.push({x:biggest.intPtr(i,0)[0], y:biggest.intPtr(i,0)[1]});
+    pts.sort((a,b)=>a.y-b.y);
+    let top = pts.slice(0,2).sort((a,b)=>a.x-b.x);
+    let bottom = pts.slice(2,4).sort((a,b)=>a.x-b.x);
+    let srcTri = cv.matFromArray(4,1,cv.CV_32FC2, [
+      top[0].x, top[0].y, top[1].x, top[1].y,
+      bottom[1].x, bottom[1].y, bottom[0].x, bottom[0].y
+    ]);
+    let width=595, height=842;
+    let dstTri = cv.matFromArray(4,1,cv.CV_32FC2,[0,0,width,0,width,height,0,height]);
+    let M = cv.getPerspectiveTransform(srcTri,dstTri);
+    let dst = new cv.Mat();
+    cv.warpPerspective(src,dst,M,new cv.Size(width,height));
+    // Auto brightness/contrast
+    let final = new cv.Mat();
+    cv.cvtColor(dst, final, cv.COLOR_RGBA2GRAY);
+    cv.equalizeHist(final, final);
+    cv.imshow(canvas,final);
+    dst.delete(); final.delete(); M.delete(); srcTri.delete(); dstTri.delete();
+  }
+
+  src.delete(); gray.delete(); edges.delete(); contours.delete(); hierarchy.delete();
+}
+
+// Capture page
+function capturePage(){
+  processCapture();
   const img = canvas.toDataURL("image/jpeg",0.7);
   pages.push(img);
 
@@ -65,41 +169,44 @@ function capture(){
   document.getElementById("preview").appendChild(previewImg);
 }
 
+// Multi-language OCR
 async function runOCR(){
   let text="";
-  document.getElementById("ocr").value="Processing...";
+  document.getElementById("ocr").value="Processing OCR...";
   for(let img of pages){
-    const res = await Tesseract.recognize(img,"eng");
-    text += res.data.text + "\n";
+    const res = await Tesseract.recognize(img,"eng+ara+fra+deu");
+    text+=res.data.text+"\n";
   }
   document.getElementById("ocr").value=text;
   return text;
 }
 
+// Export Word
 async function exportWord(){
   const text = await runOCR();
-  const doc = new Document({
-    sections:[{ children:[new Paragraph(text)] }]
-  });
-
+  const doc = new Document({sections:[{children:[new Paragraph(text)]}]});
   const blob = await Packer.toBlob(doc);
-  const link=document.createElement("a");
-  link.href=URL.createObjectURL(blob);
-  link.download="document.docx";
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "document.docx";
   link.click();
 }
 
+// Export multi-page PDF
 async function savePDF(){
   if(!pages.length) return;
-
   const pdf = new jsPDF({compress:true});
-  for(let i=0;i<pages.length;i++){
+  const text = await runOCR();
+  pages.forEach((img,i)=>{
     if(i>0) pdf.addPage();
-    pdf.addImage(pages[i],"JPEG",0,0,210,297);
-  }
+    pdf.addImage(img,"JPEG",0,0,210,297);
+  });
+  pdf.setTextColor(0,0,0,0);
+  pdf.text(text,0,0);
   pdf.save("scan.pdf");
 }
 
+// PWA
 if("serviceWorker" in navigator){
   navigator.serviceWorker.register("sw.js");
 }
