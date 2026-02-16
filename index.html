@@ -3,66 +3,19 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ultimate Scanner</title>
+<title>Ultimate Scanner Pro</title>
 
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
 <style>
-body {
-  margin:0;
-  background:#111;
-  color:#fff;
-  font-family:Arial, sans-serif;
-}
-
-video {
-  width:100%;
-  height:65vh;
-  object-fit:cover;
-  background:black;
-}
-
-.controls {
-  text-align:center;
-  padding:10px;
-}
-
-button {
-  margin:5px;
-  padding:12px 14px;
-  font-size:14px;
-  border:none;
-  border-radius:8px;
-  background:#00ff88;
-  color:#000;
-  font-weight:bold;
-}
-
-#preview {
-  display:flex;
-  overflow-x:auto;
-  padding:10px;
-  background:#1a1a1a;
-}
-
-#preview img {
-  width:90px;
-  margin-right:8px;
-  border-radius:6px;
-  border:2px solid #00ff88;
-}
-
-textarea {
-  width:100%;
-  height:140px;
-  margin-top:10px;
-  background:#222;
-  color:#fff;
-  border:none;
-  padding:10px;
-  font-size:14px;
-}
+body { margin:0; background:#111; color:#fff; font-family:Arial, sans-serif; }
+video { width:100%; height:65vh; object-fit:cover; background:black; }
+.controls { text-align:center; padding:10px; }
+button { margin:5px; padding:12px 14px; font-size:14px; border:none; border-radius:8px; background:#00ff88; color:#000; font-weight:bold; }
+#preview { display:flex; overflow-x:auto; padding:10px; background:#1a1a1a; }
+#preview img { width:90px; margin-right:8px; border-radius:6px; border:2px solid #00ff88; }
+textarea { width:100%; height:140px; margin-top:10px; background:#222; color:#fff; border:none; padding:10px; font-size:14px; }
 </style>
 </head>
 
@@ -93,59 +46,75 @@ const { jsPDF } = window.jspdf;
 let pages = [];
 let filterMode = "color";
 
-// Start camera (request higher resolution)
-navigator.mediaDevices.getUserMedia({
-  video: {
-    facingMode:"environment",
-    width: { ideal:1920 },
-    height:{ ideal:1080 }
-  }
-}).then(stream => {
-  video.srcObject = stream;
-}).catch(err=>{
-  alert("Camera error: " + err);
-});
+// START CAMERA: Rear camera, high resolution
+async function startCamera() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cameras = devices.filter(d => d.kind === "videoinput");
+    let backCamera = cameras.find(cam =>
+      cam.label.toLowerCase().includes("back") ||
+      cam.label.toLowerCase().includes("rear") ||
+      cam.label.toLowerCase().includes("environment")
+    );
 
-// Apply selected filter
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: backCamera
+        ? { deviceId: { exact: backCamera.deviceId }, width:{ideal:2560}, height:{ideal:1440}, focusMode:"continuous" }
+        : { facingMode:"environment", width:{ideal:2560}, height:{ideal:1440} }
+    });
+
+    video.srcObject = stream;
+
+  } catch (err) {
+    console.error(err);
+    alert("Camera error: " + err);
+  }
+}
+
+startCamera();
+
+// FILTERS: Color / B&W / Clean
 function applyFilter(){
   const imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
   const d = imgData.data;
 
   for(let i=0;i<d.length;i+=4){
-
     if(filterMode === "bw"){
       let gray = d[i]*0.3 + d[i+1]*0.59 + d[i+2]*0.11;
       d[i]=d[i+1]=d[i+2]=gray;
     }
-
     if(filterMode === "clean"){
       let gray = d[i]*0.3 + d[i+1]*0.59 + d[i+2]*0.11;
       gray = gray > 150 ? 255 : gray*1.15;
       d[i]=d[i+1]=d[i+2]=gray;
     }
-
     if(filterMode === "color"){
-      d[i]   = Math.min(255, d[i]   * 1.08);
-      d[i+1] = Math.min(255, d[i+1] * 1.08);
-      d[i+2] = Math.min(255, d[i+2] * 1.08);
+      // Slight contrast/brightness boost
+      d[i]   = Math.min(255, d[i]*1.08);
+      d[i+1] = Math.min(255, d[i+1]*1.08);
+      d[i+2] = Math.min(255, d[i+2]*1.08);
     }
   }
 
   ctx.putImageData(imgData,0,0);
 }
 
-function setFilter(mode){
-  filterMode = mode;
-}
+function setFilter(mode){ filterMode = mode; }
 
-function capture(){
+// Capture page with auto-focus delay and PNG (lossless)
+async function capture(){
+  if(!video.videoWidth) return;
+
+  // Wait 0.3s for camera focus
+  await new Promise(r => setTimeout(r, 300));
+
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   ctx.drawImage(video,0,0);
 
   applyFilter();
 
-  const img = canvas.toDataURL("image/jpeg",0.95); // High quality
+  const img = canvas.toDataURL("image/png"); // lossless high quality
   pages.push(img);
 
   const thumb = document.createElement("img");
@@ -153,26 +122,26 @@ function capture(){
   document.getElementById("preview").appendChild(thumb);
 }
 
+// OCR
 async function ocr(){
   if(!pages.length) return;
   document.getElementById("text").value="Processing OCR...";
   let resultText="";
-
   for(let img of pages){
     const res = await Tesseract.recognize(img,"eng");
     resultText += res.data.text + "\n";
   }
-
   document.getElementById("text").value=resultText;
 }
 
+// PDF Export
 function savePDF(){
   if(!pages.length) return;
 
   const pdf = new jsPDF({unit:"mm", format:"a4"});
   pages.forEach((img,i)=>{
     if(i>0) pdf.addPage();
-    pdf.addImage(img,"JPEG",0,0,210,297);
+    pdf.addImage(img,"PNG",0,0,210,297);
   });
 
   pdf.save("scan.pdf");
