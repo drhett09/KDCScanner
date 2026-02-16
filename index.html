@@ -4,15 +4,15 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Scanner</title>
 
-<script src="https://docs.opencv.org/4.x/opencv.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
 <style>
 body { margin:0; background:#111; color:#fff; font-family:sans-serif; }
-video { width:100%; height:60vh; object-fit:cover; }
-#preview img { width:70px; margin:4px; border:2px solid #0f0; }
-button { margin:6px; padding:10px; font-size:16px; }
+video { width:100%; height:65vh; object-fit:cover; }
+#preview { display:flex; overflow-x:auto; padding:8px; }
+#preview img { width:80px; margin-right:6px; border:2px solid #0f0; border-radius:6px; }
+button { margin:6px; padding:12px; font-size:16px; border:none; border-radius:6px; }
 textarea { width:100%; height:120px; }
 </style>
 </head>
@@ -23,8 +23,8 @@ textarea { width:100%; height:120px; }
 <canvas id="canvas" style="display:none;"></canvas>
 
 <div>
-<button onclick="capture()">Capture</button>
-<button onclick="savePDF()">PDF</button>
+<button onclick="capture()">Scan Page</button>
+<button onclick="savePDF()">Save PDF</button>
 <button onclick="ocr()">OCR</button>
 </div>
 
@@ -39,13 +39,30 @@ const { jsPDF } = window.jspdf;
 
 let pages = [];
 
-navigator.mediaDevices.getUserMedia({ video:{ facingMode:"environment"} })
-.then(stream => video.srcObject = stream);
+navigator.mediaDevices.getUserMedia({
+  video:{ facingMode:"environment"}
+}).then(stream => video.srcObject = stream);
+
+// Scanner-style image cleanup
+function enhanceImage(){
+  const imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
+  const d = imgData.data;
+
+  for(let i=0;i<d.length;i+=4){
+    let gray = d[i]*0.3 + d[i+1]*0.59 + d[i+2]*0.11;
+    gray = gray > 140 ? 255 : gray * 1.2;
+    d[i]=d[i+1]=d[i+2]=gray;
+  }
+
+  ctx.putImageData(imgData,0,0);
+}
 
 function capture(){
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   ctx.drawImage(video,0,0);
+
+  enhanceImage();
 
   const img = canvas.toDataURL("image/jpeg",0.8);
   pages.push(img);
@@ -57,6 +74,7 @@ function capture(){
 
 async function ocr(){
   let resultText="";
+  document.getElementById("text").value="Reading text...";
   for(let img of pages){
     const res = await Tesseract.recognize(img,"eng");
     resultText += res.data.text + "\n";
@@ -64,7 +82,8 @@ async function ocr(){
   document.getElementById("text").value=resultText;
 }
 
-async function savePDF(){
+function savePDF(){
+  if(!pages.length) return;
   const pdf = new jsPDF();
   pages.forEach((img,i)=>{
     if(i>0) pdf.addPage();
