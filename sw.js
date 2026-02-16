@@ -1,19 +1,6 @@
-const CACHE_NAME = "scanner-cache-v2";
-const urlsToCache = [
-  "index.html",
-  "opencv.js",
-  "jspdf.umd.min.js",
-  "tesseract.min.js"
-];
+const CACHE_NAME="scanner-cache-v1";
+const urls=["index.html","jspdf.umd.min.js","tesseract.min.js","manifest.json"];
 
-self.addEventListener("install", event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(urlsToCache))
-  );
-});
+self.addEventListener("install",e=>{ e.waitUntil(caches.open(CACHE_NAME).then(c=>c.addAll(urls))); });
 
-self.addEventListener("fetch", event => {
-  event.respondWith(
-    caches.match(event.request).then(response => response || fetch(event.request))
-  );
-});
+self.addEventListener("fetch",e=>{ e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request))); });

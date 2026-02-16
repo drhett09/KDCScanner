@@ -3,10 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ultimate Scanner Pro</title>
+<title>Ultimate Scanner Web</title>
 
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="jspdf.umd.min.js"></script>
+<script src="tesseract.min.js"></script>
+
+<link rel="manifest" href="manifest.json">
 
 <style>
 body { margin:0; background:#111; color:#fff; font-family:Arial, sans-serif; }
@@ -27,7 +29,7 @@ textarea { width:100%; height:140px; margin-top:10px; background:#222; color:#ff
 <div class="controls">
   <button onclick="setFilter('color')">Color</button>
   <button onclick="setFilter('bw')">B&W</button>
-  <button onclick="setFilter('clean')">Clean Doc</button>
+  <button onclick="setFilter('clean')">Clean</button>
   <br>
   <button onclick="capture()">Scan Page</button>
   <button onclick="savePDF()">Save PDF</button>
@@ -46,79 +48,65 @@ const { jsPDF } = window.jspdf;
 let pages = [];
 let filterMode = "color";
 
-// START CAMERA: Rear camera, high resolution
+// CAMERA SETUP: Rear camera, max resolution
 async function startCamera() {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const cameras = devices.filter(d => d.kind === "videoinput");
-    let backCamera = cameras.find(cam =>
-      cam.label.toLowerCase().includes("back") ||
-      cam.label.toLowerCase().includes("rear") ||
-      cam.label.toLowerCase().includes("environment")
-    );
+    const cams = devices.filter(d => d.kind === "videoinput");
+    let backCam = cams.find(c => /back|rear|environment/i.test(c.label));
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: backCamera
-        ? { deviceId: { exact: backCamera.deviceId }, width:{ideal:2560}, height:{ideal:1440}, focusMode:"continuous" }
-        : { facingMode:"environment", width:{ideal:2560}, height:{ideal:1440} }
+      video: backCam
+        ? { deviceId:{exact:backCam.deviceId}, width:{ideal:3840}, height:{ideal:2160} }
+        : { facingMode:"environment", width:{ideal:3840}, height:{ideal:2160} }
     });
 
     video.srcObject = stream;
-
-  } catch (err) {
-    console.error(err);
-    alert("Camera error: " + err);
+  } catch(err) {
+    alert("Camera error: "+err);
   }
 }
 
 startCamera();
 
-// FILTERS: Color / B&W / Clean
+// FILTERS
 function applyFilter(){
   const imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
   const d = imgData.data;
-
   for(let i=0;i<d.length;i+=4){
-    if(filterMode === "bw"){
+    if(filterMode==="bw"){
       let gray = d[i]*0.3 + d[i+1]*0.59 + d[i+2]*0.11;
       d[i]=d[i+1]=d[i+2]=gray;
     }
-    if(filterMode === "clean"){
+    if(filterMode==="clean"){
       let gray = d[i]*0.3 + d[i+1]*0.59 + d[i+2]*0.11;
-      gray = gray > 150 ? 255 : gray*1.15;
+      gray = gray>150?255:gray*1.15;
       d[i]=d[i+1]=d[i+2]=gray;
     }
-    if(filterMode === "color"){
-      // Slight contrast/brightness boost
-      d[i]   = Math.min(255, d[i]*1.08);
-      d[i+1] = Math.min(255, d[i+1]*1.08);
-      d[i+2] = Math.min(255, d[i+2]*1.08);
+    if(filterMode==="color"){
+      d[i]=Math.min(255,d[i]*1.08);
+      d[i+1]=Math.min(255,d[i+1]*1.08);
+      d[i+2]=Math.min(255,d[i+2]*1.08);
     }
   }
-
   ctx.putImageData(imgData,0,0);
 }
 
 function setFilter(mode){ filterMode = mode; }
 
-// Capture page with auto-focus delay and PNG (lossless)
+// CAPTURE
 async function capture(){
   if(!video.videoWidth) return;
-
-  // Wait 0.3s for camera focus
-  await new Promise(r => setTimeout(r, 300));
-
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
+  await new Promise(r=>setTimeout(r, 300)); // auto-focus wait
+  canvas.width=video.videoWidth;
+  canvas.height=video.videoHeight;
   ctx.drawImage(video,0,0);
-
   applyFilter();
-
-  const img = canvas.toDataURL("image/png"); // lossless high quality
+  const img=canvas.toDataURL("image/png");
   pages.push(img);
 
-  const thumb = document.createElement("img");
-  thumb.src = img;
+  const thumb=document.createElement("img");
+  thumb.src=img;
   document.getElementById("preview").appendChild(thumb);
 }
 
@@ -126,27 +114,29 @@ async function capture(){
 async function ocr(){
   if(!pages.length) return;
   document.getElementById("text").value="Processing OCR...";
-  let resultText="";
+  let result="";
   for(let img of pages){
     const res = await Tesseract.recognize(img,"eng");
-    resultText += res.data.text + "\n";
+    result+=res.data.text+"\n";
   }
-  document.getElementById("text").value=resultText;
+  document.getElementById("text").value=result;
 }
 
-// PDF Export
+// PDF
 function savePDF(){
   if(!pages.length) return;
-
-  const pdf = new jsPDF({unit:"mm", format:"a4"});
+  const pdf=new jsPDF({unit:"mm",format:"a4"});
   pages.forEach((img,i)=>{
     if(i>0) pdf.addPage();
     pdf.addImage(img,"PNG",0,0,210,297);
   });
-
   pdf.save("scan.pdf");
 }
-</script>
 
+// PWA support
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("sw.js");
+}
+</script>
 </body>
 </html>
